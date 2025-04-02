@@ -227,6 +227,7 @@ public class Sender implements Runnable {
      * The main run loop for the sender thread
      */
     public void run() {
+        // sender的run线程
         log.debug("Starting Kafka producer I/O thread.");
 
         // main loop, runs until close is called
@@ -271,26 +272,26 @@ public class Sender implements Runnable {
      * @param now The current POSIX time in milliseconds
      */
     void run(long now) {
+        // 这里是处理事务的 TODO 事务相关
         if (transactionManager != null) {
             try {
                 if (transactionManager.shouldResetProducerStateAfterResolvingSequences())
-                    // Check if the previous run expired batches which requires a reset of the producer state.
+                    // 检查上一次运行是否过期了需要重置生产者状态的批处理
                     transactionManager.resetProducerId();
                 if (!transactionManager.isTransactional()) {
-                    // this is an idempotent producer, so make sure we have a producer id
+                    // 这是一个幂等的 Producer，因此请确保我们有 Producer ID
                     maybeWaitForProducerId();
                 } else if (transactionManager.hasUnresolvedSequences() && !transactionManager.hasFatalError()) {
                     transactionManager.transitionToFatalError(
                         new KafkaException("The client hasn't received acknowledgment for " +
                             "some previously sent messages and can no longer retry them. It isn't safe to continue."));
                 } else if (transactionManager.hasInFlightTransactionalRequest() || maybeSendTransactionalRequest(now)) {
-                    // as long as there are outstanding transactional requests, we simply wait for them to return
+                    // 只要有未完成的事务请求，我们只需等待它们返回
                     client.poll(retryBackoffMs, now);
                     return;
                 }
 
-                // do not continue sending if the transaction manager is in a failed state or if there
-                // is no producer id (for the idempotent case).
+                // 如果事务管理器处于失败状态或存在没有生产者 ID（对于幂等情况）。
                 if (transactionManager.hasFatalError() || !transactionManager.hasProducerId()) {
                     RuntimeException lastError = transactionManager.lastError();
                     if (lastError != null)
@@ -307,42 +308,59 @@ public class Sender implements Runnable {
             }
         }
 
+        // 设置待发送数据到channel缓冲区 注意这里的channel还是阻塞的
         long pollTimeout = sendProducerData(now);
+
+        // 数据发送
         client.poll(pollTimeout, now);
     }
 
     private long sendProducerData(long now) {
+        // 集群信息
         Cluster cluster = metadata.fetch();
-        // get the list of partitions with data ready to send
+        // 1.获取有leader replica 的 node
         RecordAccumulator.ReadyCheckResult result = this.accumulator.ready(cluster, now);
 
-        // if there are any partitions whose leaders are not known yet, force metadata update
+        // 如果有任何分区的 leader 尚不清楚，则强制元数据更新
         if (!result.unknownLeaderTopics.isEmpty()) {
-            // The set of topics with unknown leader contains topics with leader election pending as well as
-            // topics which may have expired. Add the topic again to metadata to ensure it is included
-            // and request metadata update, since there are messages to send to the topic.
+            /*
+             具有未知领导者的主题集包含领导者选举待定的主题以及可能已过期的主题。
+             再次将主题添加到元数据以确保它包含在内并请求元数据更新，因为有消息要发送到该主题。
+             */
             for (String topic : result.unknownLeaderTopics)
                 this.metadata.add(topic);
 
             log.debug("Requesting metadata update due to unknown leader topics from the batched records: {}",
                 result.unknownLeaderTopics);
+            // 修改更新标识
             this.metadata.requestUpdate();
         }
 
-        // remove any nodes we aren't ready to send to
+
+        // 2.如果与node 没有连接（如果可以连接,会初始化该连接）,暂时先移除该 node 在后续poll会初始化
         Iterator<Node> iter = result.readyNodes.iterator();
         long notReadyTimeout = Long.MAX_VALUE;
         while (iter.hasNext()) {
             Node node = iter.next();
+            // 3部分校验 连接 管道 in
             if (!this.client.ready(node, now)) {
                 iter.remove();
                 notReadyTimeout = Math.min(notReadyTimeout, this.client.pollDelayMs(node, now));
             }
         }
 
-        // create produce requests
+        // 创建请求体 这里需要提出accumulator要发送的数据 nodeId-batch 注意：抽取后是不能在发送数据到batch的
+        // maxRequestSize == max.request.size 指定最大体积
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
+
+        /*
+            这个是记录批次数量的，用于限流控制 由max.in.flight.requests.per.connection控制！！！
+             为什么需要这样做呢，在这里会把ProducerBatch集合放入到inFlightBatches，一旦inFlightBatches超过指定的
+             数量就会阻塞直到发送完成
+         */
         addToInflightBatches(batches);
+
+        // 如果需要保证消息得顺序
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
             for (List<ProducerBatch> batchList : batches.values()) {
@@ -351,7 +369,13 @@ public class Sender implements Runnable {
             }
         }
 
+        /*
+            从 inflightBatches 与 batches 中查找已过期的消息批次(ProducerBatch)，
+            判断是否过期的标准是系统当前时间与 ProducerBatch
+            创建时间之差是否超过120s，过期时间可以通过参数 delivery.timeout.ms 设置。
+         */
         accumulator.resetNextBatchExpiryTime();
+        // 从刚刚抽取的批次获取到已经过期的批次
         List<ProducerBatch> expiredInflightBatches = getExpiredInflightBatches(now);
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(now);
         expiredBatches.addAll(expiredInflightBatches);
@@ -359,17 +383,25 @@ public class Sender implements Runnable {
         // Reset the producer id if an expired batch has previously been sent to the broker. Also update the metrics
         // for expired batches. see the documentation of @TransactionState.resetProducerId to understand why
         // we need to reset the producer id here.
+
+        /*
+            处理已超时的消息批次，通知该批消息发送失败，即通过设置 KafkaProducer#send
+            方法返回的凭证中的 FutureRecordMetadata 中的 ProduceRequestResult result，使之调用其 get 方法不会阻塞。
+         */
         if (!expiredBatches.isEmpty())
             log.trace("Expired {} batches in accumulator", expiredBatches.size());
-        for (ProducerBatch expiredBatch : expiredBatches) {
+        for (ProducerBatch expiredBatch : expiredBatches) { // 过期批次的处理
             String errorMessage = "Expiring " + expiredBatch.recordCount + " record(s) for " + expiredBatch.topicPartition
                 + ":" + (now - expiredBatch.createdMs) + " ms has passed since batch creation";
+            // 进行失败降级处理 通知失败
             failBatch(expiredBatch, -1, NO_TIMESTAMP, new TimeoutException(errorMessage), false);
+            // 对于过期事务也需要处理 TODO 事务相关
             if (transactionManager != null && expiredBatch.inRetry()) {
                 // This ensures that no new batches are drained until the current in flight batches are fully resolved.
                 transactionManager.markSequenceUnresolved(expiredBatch.topicPartition);
             }
         }
+        // 记录指标
         sensors.updateProduceRequestMetrics(batches);
 
         // If we have any nodes that are ready to send + have sendable data, poll with 0 timeout so this can immediately
@@ -377,6 +409,13 @@ public class Sender implements Runnable {
         // time, and the delay time for checking data availability. Note that the nodes may have data that isn't yet
         // sendable due to lingering, backing off, etc. This specifically does not include nodes with sendable data
         // that aren't ready to send since they would cause busy looping.
+        /*
+            设置发送的延时，因为现在只是放到缓冲区，后面会进行poll发送 TODO 延时对发送数据的影响
+            该步骤按照 brokerId 分别构建发送请求，即每一个 broker 会将多个
+            ProducerBatch 一起封装成一个请求进行发送，同一时间，每一个 与 broker 连接只会只能发送一个请求，
+            注意，这里只是构建请求，并最终会通过 NetworkClient#send 方法，将该批数据设置到 NetworkClient 的待发送数据中，
+            此时并没有触发真正的网络调用。
+         */
         long pollTimeout = Math.min(result.nextReadyCheckDelayMs, notReadyTimeout);
         pollTimeout = Math.min(pollTimeout, this.accumulator.nextExpiryTimeMs() - now);
         pollTimeout = Math.max(pollTimeout, 0);
@@ -388,6 +427,8 @@ public class Sender implements Runnable {
             // otherwise the select time will be the time difference between now and the metadata expiry time;
             pollTimeout = 0;
         }
+
+        // 把batch放入selector中
         sendProduceRequests(batches, now);
         return pollTimeout;
     }
@@ -738,6 +779,7 @@ public class Sender implements Runnable {
      */
     private void sendProduceRequests(Map<Integer, List<ProducerBatch>> collated, long now) {
         for (Map.Entry<Integer, List<ProducerBatch>> entry : collated.entrySet())
+            // 注意这里有acks参数
             sendProduceRequest(now, entry.getKey(), acks, requestTimeoutMs, entry.getValue());
     }
 
@@ -779,8 +821,11 @@ public class Sender implements Runnable {
         if (transactionManager != null && transactionManager.isTransactional()) {
             transactionalId = transactionManager.transactionalId();
         }
+
+        // acks参数 过期时间 partition 事务ID
         ProduceRequest.Builder requestBuilder = ProduceRequest.Builder.forMagic(minUsedMagic, acks, timeout,
                 produceRecordsByPartition, transactionalId);
+
         RequestCompletionHandler callback = new RequestCompletionHandler() {
             public void onComplete(ClientResponse response) {
                 handleProduceResponse(response, recordsByPartition, time.milliseconds());
@@ -790,12 +835,15 @@ public class Sender implements Runnable {
         String nodeId = Integer.toString(destination);
         ClientRequest clientRequest = client.newClientRequest(nodeId, requestBuilder, now, acks != 0,
                 requestTimeoutMs, callback);
+
+        //
         client.send(clientRequest, now);
         log.trace("Sent produce request to {}: {}", nodeId, requestBuilder);
     }
 
     /**
      * Wake up the selector associated with this send thread
+     * 唤醒与此发送线程关联的选择器
      */
     public void wakeup() {
         this.client.wakeup();

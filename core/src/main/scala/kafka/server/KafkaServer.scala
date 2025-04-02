@@ -181,6 +181,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
   )
 
   /**
+   * kafka server启动的入口，代表一个pod
    * Start up API for bringing up a single instance of the Kafka server.
    * Instantiates the LogManager, the SocketServer and the request handlers - KafkaRequestHandlers
    */
@@ -194,14 +195,16 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
       if (startupComplete.get)
         return
 
+      // cas修改启动状态
       val canStartup = isStartingUp.compareAndSet(false, true)
       if (canStartup) {
+        // 修改broker状态
         brokerState.newState(Starting)
 
-        /* setup zookeeper */
+        /* 初始化 注册到zookeeper */
         initZkClient(time)
 
-        /* Get or create cluster_id */
+        /* 获取或者创建clientId 就是一个随机的base64字符串 */
         _clusterId = getOrGenerateClusterId(zkClient)
         info(s"Cluster ID = $clusterId")
 
@@ -213,6 +216,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
 
         // initialize dynamic broker configs from ZooKeeper. Any updates made after this will be
         // applied after DynamicConfigManager starts.
+        // 需要维护一个本地的变量表 记录维护关系
         config.dynamicConfig.initialize(zkClient)
 
         /* start scheduler */
@@ -246,6 +250,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
         // Create and start the socket server acceptor threads so that the bound port is known.
         // Delay starting processors until the end of the initialization sequence to ensure
         // that credentials have been loaded before processing authentications.
+        // 前面的都是一些初始化化操作，这里就是开启启动server了
         socketServer = new SocketServer(config, metrics, time, credentialProvider)
         socketServer.startup(startupProcessors = false)
 

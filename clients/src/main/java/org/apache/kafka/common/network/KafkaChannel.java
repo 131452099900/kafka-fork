@@ -329,6 +329,7 @@ public class KafkaChannel {
         if (this.send != null)
             throw new IllegalStateException("Attempt to begin a send operation with prior send operation still in progress, connection id is " + id);
         this.send = send;
+        // 添加channel的写事件
         this.transportLayer.addInterestOps(SelectionKey.OP_WRITE);
     }
 
@@ -353,6 +354,7 @@ public class KafkaChannel {
 
     public Send write() throws IOException {
         Send result = null;
+        // 执行sneder
         if (send != null && send(send)) {
             result = send;
             send = null;
@@ -382,6 +384,7 @@ public class KafkaChannel {
     }
 
     private boolean send(Send send) throws IOException {
+        // 真正调用写入
         send.writeTo(transportLayer);
         if (send.completed())
             transportLayer.removeInterestOps(SelectionKey.OP_WRITE);

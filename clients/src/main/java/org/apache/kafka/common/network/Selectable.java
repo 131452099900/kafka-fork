@@ -64,7 +64,7 @@ public interface Selectable {
     void send(Send send);
 
     /**
-     * Do I/O. Reads, writes, connection establishment, etc.
+     * Do I/O. 读取、写入、连接建立等。
      * @param timeout The amount of time to block if there is nothing to do
      * @throws IOException
      */

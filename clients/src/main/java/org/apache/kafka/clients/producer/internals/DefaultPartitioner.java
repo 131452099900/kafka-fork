@@ -55,17 +55,20 @@ public class DefaultPartitioner implements Partitioner {
         List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
         int numPartitions = partitions.size();
         if (keyBytes == null) {
+            // 如果没有key的情况 会维护一个自增数来作为消息的ID
             int nextValue = nextValue(topic);
+            // 获取集群该topic的可用分区，也就是leader不为null的分区
             List<PartitionInfo> availablePartitions = cluster.availablePartitionsForTopic(topic);
             if (availablePartitions.size() > 0) {
+                // 根据key的hash值取模来获取分区
                 int part = Utils.toPositive(nextValue) % availablePartitions.size();
                 return availablePartitions.get(part).partition();
             } else {
-                // no partitions are available, give a non-available partition
+                // 没有可用分区的话根据所有分区数取模
                 return Utils.toPositive(nextValue) % numPartitions;
             }
         } else {
-            // hash the keyBytes to choose a partition
+            // 有key的话直接根据key的hash值对分区数取模
             return Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
         }
     }

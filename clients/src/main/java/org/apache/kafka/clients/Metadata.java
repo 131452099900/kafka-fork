@@ -68,6 +68,8 @@ public class Metadata implements Closeable {
     /* Topics with expiry time */
     private final Map<String, Long> topics;
     private final List<Listener> listeners;
+
+    // 这个是监听者
     private final ClusterResourceListeners clusterResourceListeners;
     private boolean needMetadataForAllTopics;
     private final boolean allowAutoTopicCreation;
@@ -116,10 +118,12 @@ public class Metadata implements Closeable {
     /**
      * Add the topic to maintain in the metadata. If topic expiry is enabled, expiry time
      * will be reset on the next update.
+     * 添加要在元数据中维护的主题。如果启用了主题过期，则过期时间将在下次更新时重置。
      */
     public synchronized void add(String topic) {
         Objects.requireNonNull(topic, "topic cannot be null");
         if (topics.put(topic, TOPIC_EXPIRY_NEEDS_UPDATE) == null) {
+            // 如果本身topic没有这个值，则需要更新
             requestUpdateForNewTopics();
         }
     }
@@ -143,6 +147,7 @@ public class Metadata implements Closeable {
      * @return remaining time in ms till updating the cluster info
      */
     public synchronized long timeToNextUpdate(long nowMs) {
+        // needUpdate强制更新标识 以及metadata过期更新
         long timeToExpire = needUpdate ? 0 : Math.max(this.lastSuccessfulRefreshMs + this.metadataExpireMs - nowMs, 0);
         return Math.max(timeToExpire, timeToAllowUpdate(nowMs));
     }
@@ -151,6 +156,7 @@ public class Metadata implements Closeable {
      * Request an update of the current cluster metadata info, return the current version before the update
      */
     public synchronized int requestUpdate() {
+        // 标识需要更新
         this.needUpdate = true;
         return this.version;
     }
@@ -185,11 +191,13 @@ public class Metadata implements Closeable {
 
         long begin = System.currentTimeMillis();
         long remainingWaitMs = maxWaitMs;
+        // 阻塞直到新版本的更新
         while ((this.version <= lastVersion) && !isClosed()) {
             AuthenticationException ex = getAndClearAuthenticationException();
             if (ex != null)
                 throw ex;
             if (remainingWaitMs != 0)
+                // 阻塞线程，等待 metadata 的更新 这里使用的是synchronize的锁
                 wait(remainingWaitMs);
             long elapsed = System.currentTimeMillis() - begin;
             if (elapsed >= maxWaitMs)

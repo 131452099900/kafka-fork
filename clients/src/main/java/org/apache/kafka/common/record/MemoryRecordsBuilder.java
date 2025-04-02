@@ -627,6 +627,7 @@ public class MemoryRecordsBuilder {
                                      Header[] headers) throws IOException {
         ensureOpenForRecordAppend();
         int offsetDelta = (int) (offset - baseOffset);
+        // 计算时间增量
         long timestampDelta = timestamp - firstTimestamp;
         int sizeInBytes = DefaultRecord.writeTo(appendStream, offsetDelta, timestampDelta, key, value, headers);
         recordWritten(offset, timestamp, sizeInBytes);

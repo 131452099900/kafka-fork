@@ -49,7 +49,10 @@ public class ProducerConfig extends AbstractConfig {
 
     private static final ConfigDef CONFIG;
 
-    /** <code>bootstrap.servers</code> */
+    /**
+     * kafka配置的集群信息
+     * <code>bootstrap.servers</code> */
+
     public static final String BOOTSTRAP_SERVERS_CONFIG = CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG;
 
     /** <code>client.dns.lookup</code> */

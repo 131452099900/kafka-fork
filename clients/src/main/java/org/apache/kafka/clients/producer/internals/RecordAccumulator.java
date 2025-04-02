@@ -194,31 +194,34 @@ public final class RecordAccumulator {
         if (headers == null) headers = Record.EMPTY_HEADERS;
         try {
             // check if we have an in-progress batch
+            // 一个双端队列ArrauDequeue
             Deque<ProducerBatch> dq = getOrCreateDeque(tp);
             synchronized (dq) {
                 if (closed)
                     throw new KafkaException("Producer closed while send in progress");
+
+                // 加入队列 一般这里没什么问题就成功了
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callback, dq);
                 if (appendResult != null)
                     return appendResult;
             }
-
-            // we don't have an in-progress record batch try to allocate a new batch
             byte maxUsableMagic = apiVersions.maxUsableProduceMagic();
+            // 计算新的batch内存
             int size = Math.max(this.batchSize, AbstractRecords.estimateSizeInBytesUpperBound(maxUsableMagic, compression, key, value, headers));
             log.trace("Allocating a new {} byte message buffer for topic {} partition {}", size, tp.topic(), tp.partition());
+            // 为新的batch分配内存 （锁外）
             buffer = free.allocate(size, maxTimeToBlock);
             synchronized (dq) {
-                // Need to check if producer is closed again after grabbing the dequeue lock.
                 if (closed)
                     throw new KafkaException("Producer closed while send in progress");
-
+                // 这里继续尝试，主要是因为有可能别的线程创建ProducerBatch成功，分配内存不在临界区内
                 RecordAppendResult appendResult = tryAppend(timestamp, key, value, headers, callback, dq);
                 if (appendResult != null) {
                     // Somebody else found us a batch, return the one we waited for! Hopefully this doesn't happen often...
                     return appendResult;
                 }
 
+                // 还是失败了，说明可能是ProducerBatch已经满了，就用新的ProducerBatch，再次尝试 新增batch
                 MemoryRecordsBuilder recordsBuilder = recordsBuilder(buffer, maxUsableMagic);
                 ProducerBatch batch = new ProducerBatch(tp, recordsBuilder, time.milliseconds());
                 FutureRecordMetadata future = Utils.notNull(batch.tryAppend(timestamp, key, value, headers, callback, time.milliseconds()));
@@ -226,7 +229,7 @@ public final class RecordAccumulator {
                 dq.addLast(batch);
                 incomplete.add(batch);
 
-                // Don't deallocate this buffer in the finally block as it's being used in the record batch
+                // 这里已经时投入使用了，说明创建成功，并且没有其他线程竞争是需要保存下来的
                 buffer = null;
                 return new RecordAppendResult(future, dq.size() > 1 || batch.isFull(), true);
             }
@@ -255,14 +258,17 @@ public final class RecordAccumulator {
      */
     private RecordAppendResult tryAppend(long timestamp, byte[] key, byte[] value, Header[] headers,
                                          Callback callback, Deque<ProducerBatch> deque) {
+        // 获取最新的ProducerBatch
         ProducerBatch last = deque.peekLast();
         if (last != null) {
             FutureRecordMetadata future = last.tryAppend(timestamp, key, value, headers, callback, time.milliseconds());
+            // 空间不够，返回null
             if (future == null)
                 last.closeForRecordAppends();
             else
                 return new RecordAppendResult(future, deque.size() > 1 || last.isFull(), false);
         }
+        // 取不到返回null
         return null;
     }
 
@@ -418,6 +424,8 @@ public final class RecordAccumulator {
      * Get a list of nodes whose partitions are ready to be sent, and the earliest time at which any non-sendable
      * partition will be ready; Also return the flag for whether there are any unknown leaders for the accumulated
      * partition batches.
+     * 获取分区已准备好发送的节点列表
+     * 就是获取各个broker（存在主partition）
      * <p>
      * A destination node is ready to send data if:
      * <ol>
@@ -799,6 +807,7 @@ public final class RecordAccumulator {
      * The set of nodes that have at least one complete record batch in the accumulator
      */
     public final static class ReadyCheckResult {
+        // broker节点集合
         public final Set<Node> readyNodes;
         public final long nextReadyCheckDelayMs;
         public final Set<String> unknownLeaderTopics;

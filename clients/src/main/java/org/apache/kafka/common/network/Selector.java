@@ -381,12 +381,14 @@ public class Selector implements Selectable, AutoCloseable {
      */
     public void send(Send send) {
         String connectionId = send.destination();
+        // 从连接ID获取kafkaChannel，实际上就是一个nioSelector
         KafkaChannel channel = openOrClosingChannelOrFail(connectionId);
         if (closingChannels.containsKey(connectionId)) {
             // ensure notification via `disconnected`, leave channel in the state in which closing was triggered
             this.failedSends.add(connectionId);
         } else {
             try {
+                // 只是把channel中设置一个send，实际上得后续poll进行发送 ！！！ 给channel添加写事件
                 channel.setSend(send);
             } catch (Exception e) {
                 // update the state for consistency, the channel will be discarded after `close`
@@ -427,7 +429,7 @@ public class Selector implements Selectable, AutoCloseable {
      * requests from a channel are processed on the broker in the order they are sent. Since outstanding requests added
      * by SocketServer to the request queue may be processed by different request handler threads, requests on each
      * channel must be processed one-at-a-time to guarantee ordering.
-     *
+     *  ！！！真正处理io事件，主要有4种io事件 读 写 连接 断开连接
      * @param timeout The amount of time to wait, in milliseconds, which must be non-negative
      * @throws IllegalArgumentException If `timeout` is negative
      * @throws IllegalStateException If a send is given for which we have no existing connection or for which there is
@@ -457,16 +459,19 @@ public class Selector implements Selectable, AutoCloseable {
             outOfMemory = false;
         }
 
-        /* check ready keys */
+
         long startSelect = time.nanoseconds();
+        /* 获取就绪事件的数numReadyKeys 这里就是去调用java nio的selector */
+        // 注意这里是会阻塞的，如果wakeup唤醒这里，有可能会返回0，然后重新开始
         int numReadyKeys = select(timeout);
         long endSelect = time.nanoseconds();
         this.sensors.selectTime.record(endSelect - startSelect, time.milliseconds());
 
+        // numReadyKeys大于0
         if (numReadyKeys > 0 || !immediatelyConnectedKeys.isEmpty() || dataInBuffers) {
             Set<SelectionKey> readyKeys = this.nioSelector.selectedKeys();
 
-            // Poll from channels that have buffered data (but nothing more from the underlying socket)
+            //从具有缓冲数据的通道轮询（但仅来自底层套接字）
             if (dataInBuffers) {
                 keysWithBufferedRead.removeAll(readyKeys); //so no channel gets polled twice
                 Set<SelectionKey> toPoll = keysWithBufferedRead;
@@ -474,7 +479,7 @@ public class Selector implements Selectable, AutoCloseable {
                 pollSelectionKeys(toPoll, false, endSelect);
             }
 
-            // Poll from channels where the underlying socket has more data
+            // 从底层套接字具有更多数据的通道进行轮询
             pollSelectionKeys(readyKeys, false, endSelect);
             // Clear all selected keys so that they are included in the ready count for the next select
             readyKeys.clear();
@@ -495,8 +500,7 @@ public class Selector implements Selectable, AutoCloseable {
         // have just been processed in pollSelectionKeys
         maybeCloseOldestConnection(endSelect);
 
-        // Add to completedReceives after closing expired connections to avoid removing
-        // channels with completed receives until all staged receives are completed.
+        // ！！！在关闭过期连接后添加到 completedReceives ，以避免在所有暂存接收完成之前删除具有已完成接收的通道。
         addToCompletedReceives();
     }
 
@@ -561,10 +565,11 @@ public class Selector implements Selectable, AutoCloseable {
                     keysWithBufferedRead.add(key);
                 }
 
-                /* if channel is ready write to any sockets that have space in their buffer and for which we have data */
+                /* 如果 channel 已准备好，则写入缓冲区中有空间且我们有数据的任何套接字 */
                 if (channel.ready() && key.isWritable()) {
                     Send send;
                     try {
+                        // channel执行写入
                         send = channel.write();
                     } catch (Exception e) {
                         sendFailed = true;
@@ -749,8 +754,8 @@ public class Selector implements Selectable, AutoCloseable {
 
     /**
      * Check for data, waiting up to the given timeout.
-     *
-     * @param timeoutMs Length of time to wait, in milliseconds, which must be non-negative
+     * 这里其实就是NIO了，也就是selector去轮询他监听下面的chanel是否有就绪事件
+     * @param timeoutMs 如果为0直接轮询到事件就返回，否则需要阻塞ms
      * @return The number of keys ready
      */
     private int select(long timeoutMs) throws IOException {
