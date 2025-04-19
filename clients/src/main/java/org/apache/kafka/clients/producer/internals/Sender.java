@@ -120,7 +120,7 @@ public class Sender implements Runnable {
     /* all the state related to transactions, in particular the producer id, producer epoch, and sequence numbers */
     private final TransactionManager transactionManager;
 
-    // A per-partition queue of batches ordered by creation time for tracking the in-flight batches
+    // 用于追踪正在发送的批次，简单来说就是一个缓冲区，未ack的消息
     private final Map<TopicPartition, List<ProducerBatch>> inFlightBatches;
 
     public Sender(LogContext logContext,
@@ -159,6 +159,9 @@ public class Sender implements Runnable {
         return inFlightBatches.containsKey(tp) ? inFlightBatches.get(tp) : new ArrayList<>();
     }
 
+    /*
+     * 删除batchs
+     */
     public void maybeRemoveFromInflightBatches(ProducerBatch batch) {
         List<ProducerBatch> batches = inFlightBatches.get(batch.topicPartition);
         if (batches != null) {
@@ -279,7 +282,7 @@ public class Sender implements Runnable {
                     // 检查上一次运行是否过期了需要重置生产者状态的批处理
                     transactionManager.resetProducerId();
                 if (!transactionManager.isTransactional()) {
-                    // 这是一个幂等的 Producer，因此请确保我们有 Producer ID
+                    // ！！！这是一个幂等的 Producer，因此请确保我们有 Producer ID 幂等就是 producerID+自增序列号
                     maybeWaitForProducerId();
                 } else if (transactionManager.hasUnresolvedSequences() && !transactionManager.hasFatalError()) {
                     transactionManager.transitionToFatalError(
@@ -353,18 +356,15 @@ public class Sender implements Runnable {
         // maxRequestSize == max.request.size 指定最大体积
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
 
-        /*
-            这个是记录批次数量的，用于限流控制 由max.in.flight.requests.per.connection控制！！！
-             为什么需要这样做呢，在这里会把ProducerBatch集合放入到inFlightBatches，一旦inFlightBatches超过指定的
-             数量就会阻塞直到发送完成
-         */
+        // 添加到inflightBatches中 这个代码是新加的要考虑他干嘛了？
         addToInflightBatches(batches);
 
         // 如果需要保证消息得顺序
         if (guaranteeMessageOrder) {
-            // Mute all the partitions drained
+            // 静音所有已排空的分区
             for (List<ProducerBatch> batchList : batches.values()) {
                 for (ProducerBatch batch : batchList)
+                    //
                     this.accumulator.mutePartition(batch.topicPartition);
             }
         }
@@ -375,8 +375,9 @@ public class Sender implements Runnable {
             创建时间之差是否超过120s，过期时间可以通过参数 delivery.timeout.ms 设置。
          */
         accumulator.resetNextBatchExpiryTime();
-        // 从刚刚抽取的批次获取到已经过期的批次
+        // 这里是在获取已经发送了的批次，但是过期未收到ack的   也就是batchs所在了
         List<ProducerBatch> expiredInflightBatches = getExpiredInflightBatches(now);
+        // 这里是在未发送缓冲区获取已经过期的批次
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(now);
         expiredBatches.addAll(expiredInflightBatches);
 
@@ -661,6 +662,7 @@ public class Sender implements Runnable {
                 // the correct offset and timestamp.
                 //
                 // The only thing we can do is to return success to the user and not return a valid offset and timestamp.
+                // ！！！删除batch
                 completeBatch(batch, response);
             } else {
                 final RuntimeException exception;
@@ -687,10 +689,12 @@ public class Sender implements Runnable {
                 metadata.requestUpdate();
             }
         } else {
+            // 正常情况
+            // ！！！删除batch
             completeBatch(batch, response);
         }
 
-        // Unmute the completed partition.
+        // 取消对顺序性的集合的移除 这样下一条消息就能发送了
         if (guaranteeMessageOrder)
             this.accumulator.unmutePartition(batch.topicPartition, throttleUntilTimeMs);
     }
@@ -716,6 +720,7 @@ public class Sender implements Runnable {
         }
 
         if (batch.done(response.baseOffset, response.logAppendTime, null)) {
+            // 真正删除batch
             maybeRemoveFromInflightBatches(batch);
             this.accumulator.deallocate(batch);
         }
@@ -833,6 +838,8 @@ public class Sender implements Runnable {
         };
 
         String nodeId = Integer.toString(destination);
+
+        //
         ClientRequest clientRequest = client.newClientRequest(nodeId, requestBuilder, now, acks != 0,
                 requestTimeoutMs, callback);
 

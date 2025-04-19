@@ -81,6 +81,7 @@ public final class RecordAccumulator {
     private final ConcurrentMap<TopicPartition, Deque<ProducerBatch>> batches;
     private final IncompleteBatches incomplete;
     // The following variables are only accessed by the sender thread, so we don't need to protect them.
+    // 以下变量只能由 sender 线程访问，因此我们不需要保护它们
     private final Map<TopicPartition, Long> muted;
     private int drainIndex;
     private final TransactionManager transactionManager;

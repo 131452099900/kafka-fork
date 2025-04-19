@@ -671,7 +671,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      *      but not yet finished, this method awaits its completion.
      *   2. Gets the internal producer id and epoch, used in all future transactional
      *      messages issued by the producer.
-     *
+     *   其实
      * Note that this method will raise {@link TimeoutException} if the transactional state cannot
      * be initialized before expiration of {@code max.block.ms}. Additionally, it will raise {@link InterruptException}
      * if interrupted. It is safe to retry in either case, but once the transactional state has been successfully
@@ -687,6 +687,11 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws InterruptException if the thread is interrupted while blocked
      */
     public void initTransactions() {
+        /*
+            其实就干了两件事务，第一校验transaction id和事务状态；第二就是去申请producer ID
+         */
+
+
         // 初始化事务的时候会唤醒sender线程
         throwIfNoTransactionManager();
         if (initTransactionsResult == null) {

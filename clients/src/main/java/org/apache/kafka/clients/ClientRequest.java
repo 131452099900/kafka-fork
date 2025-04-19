@@ -37,7 +37,7 @@ public final class ClientRequest {
     /**
      * @param destination The brokerId to send the request to
      * @param requestBuilder The builder for the request to make
-     * @param correlationId The correlation id for this client request
+     * @param correlationId 此客户端请求的相关 ID
      * @param clientId The client ID to use for the header
      * @param createdTimeMs The unix timestamp in milliseconds for the time at which this request was created.
      * @param expectResponse Should we expect a response message or is this request complete once it is sent?
@@ -51,9 +51,12 @@ public final class ClientRequest {
                          boolean expectResponse,
                          int requestTimeoutMs,
                          RequestCompletionHandler callback) {
+        // brokeId
         this.destination = destination;
         this.requestBuilder = requestBuilder;
+        //
         this.correlationId = correlationId;
+        // 客户端ID
         this.clientId = clientId;
         this.createdTimeMs = createdTimeMs;
         this.expectResponse = expectResponse;

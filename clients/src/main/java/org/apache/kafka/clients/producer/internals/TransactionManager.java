@@ -206,6 +206,8 @@ public class TransactionManager {
         setProducerIdAndEpoch(ProducerIdAndEpoch.NONE);
         this.nextSequence.clear();
         InitProducerIdRequest.Builder builder = new InitProducerIdRequest.Builder(transactionalId, transactionTimeoutMs);
+
+        // 构造一个请求producer id的request 等待sender线程发送
         InitProducerIdHandler handler = new InitProducerIdHandler(builder);
         enqueueRequest(handler);
         return handler.result;
@@ -576,6 +578,7 @@ public class TransactionManager {
                 // The partition has been fully drained. At this point, the last ack'd sequence should be once less than
                 // next sequence destined for the partition. If so, the partition is fully resolved. If not, we should
                 // reset the sequence number if necessary.
+                // 给topic的leader partition 自增ID
                 if (isNextSequence(topicPartition, sequenceNumber(topicPartition))) {
                     // This would happen when a batch was expired, but subsequent batches succeeded.
                     iter.remove();
@@ -776,6 +779,7 @@ public class TransactionManager {
     }
 
     private void ensureTransactional() {
+
         if (!isTransactional())
             throw new IllegalStateException("Transactional method invoked on a non-transactional producer.");
     }
@@ -968,17 +972,27 @@ public class TransactionManager {
             Errors error = initProducerIdResponse.error();
 
             if (error == Errors.NONE) {
+                // 保存结果 producer id和epoch
                 ProducerIdAndEpoch producerIdAndEpoch = new ProducerIdAndEpoch(initProducerIdResponse.producerId(), initProducerIdResponse.epoch());
+
+                // 保存结果 producer id和epoch
                 setProducerIdAndEpoch(producerIdAndEpoch);
+
+                // 本地状态更改状态为READY
                 transitionTo(State.READY);
                 lastError = null;
+
+                // 通知异步结果已完成
                 result.done();
             } else if (error == Errors.NOT_COORDINATOR || error == Errors.COORDINATOR_NOT_AVAILABLE) {
+                // 如果TC服务没有找到或者刚好挂掉，那么生成FindCoordinatorRequest请求，等待发送
                 lookupCoordinator(FindCoordinatorRequest.CoordinatorType.TRANSACTION, transactionalId);
                 reenqueue();
             } else if (error == Errors.COORDINATOR_LOAD_IN_PROGRESS || error == Errors.CONCURRENT_TRANSACTIONS) {
+                // 如果TC服务正在启动中，那么加入队列，等待发送
                 reenqueue();
             } else if (error == Errors.TRANSACTIONAL_ID_AUTHORIZATION_FAILED) {
+                // 如果发生权限问题，那么认为进入错误状态
                 fatalError(error.exception());
             } else {
                 fatalError(new KafkaException("Unexpected error in InitProducerIdResponse; " + error.message()));
@@ -1090,6 +1104,9 @@ public class TransactionManager {
         }
     }
 
+    /**
+     * 寻找coordinator请求
+     */
     private class FindCoordinatorHandler extends TxnRequestHandler {
         private final FindCoordinatorRequest.Builder builder;
 
