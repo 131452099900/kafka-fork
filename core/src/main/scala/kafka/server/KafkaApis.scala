@@ -1082,10 +1082,10 @@ class KafkaApis(val requestChannel: RequestChannel,
                 new OffsetFetchResponse(requestThrottleMs, Errors.NONE, authorizedPartitionData.asJava)
               }
             } else {
+              // 获取对应的分区数据
               val (authorizedPartitions, unauthorizedPartitions) = offsetFetchRequest.partitions.asScala
                 .partition(authorizeTopicDescribe)
-              val (error, authorizedPartitionData) = groupCoordinator.handleFetchOffsets(offsetFetchRequest.groupId,
-                Some(authorizedPartitions))
+              val (error, authorizedPartitionData) = groupCoordinator.handleFetchOffsets(offsetFetchRequest.groupId, Some(authorizedPartitions))
               if (error != Errors.NONE)
                 offsetFetchRequest.getErrorResponse(requestThrottleMs, error)
               else {

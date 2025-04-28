@@ -353,6 +353,7 @@ public class Sender implements Runnable {
         }
 
         // 创建请求体 这里需要提出accumulator要发送的数据 nodeId-batch 注意：抽取后是不能在发送数据到batch的
+        // 注意对于一个node的tp如果存在mute中会跳过
         // maxRequestSize == max.request.size 指定最大体积
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
 

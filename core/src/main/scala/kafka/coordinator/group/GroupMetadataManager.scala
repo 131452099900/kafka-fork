@@ -176,6 +176,7 @@ class GroupMetadataManager(brokerId: Int,
   }
   /**
    * Get the group associated with the given groupId, or null if not found
+   * 根据groupId获取groupMetadata
    */
   def getGroup(groupId: String): Option[GroupMetadata] = {
     Option(groupMetadataCache.get(groupId))
@@ -183,6 +184,7 @@ class GroupMetadataManager(brokerId: Int,
 
   /**
    * Add a group or get the group associated with the given groupId if it already exists
+   * 添加组
    */
   def addGroup(group: GroupMetadata): GroupMetadata = {
     val currentGroup = groupMetadataCache.putIfNotExists(group.groupId, group)
@@ -339,7 +341,7 @@ class GroupMetadataManager(brokerId: Int,
           records.foreach(builder.append)
           val entries = Map(offsetTopicPartition -> builder.build())
 
-          // set the callback function to insert offsets into cache after log append completed
+          // 设置回调函数以在 Log Append 完成后将偏移量插入缓存
           def putCacheCallback(responseStatus: Map[TopicPartition, PartitionResponse]) {
             // the append response should only contain the topics partition
             if (responseStatus.size != 1 || !responseStatus.contains(offsetTopicPartition))
@@ -420,6 +422,7 @@ class GroupMetadataManager(brokerId: Int,
             }
           }
 
+          // 成功追加后回调putCacheCallback插入缓存
           appendForGroup(group, entries, putCacheCallback)
 
         case None =>
@@ -433,11 +436,14 @@ class GroupMetadataManager(brokerId: Int,
   }
 
   /**
-   * The most important guarantee that this API provides is that it should never return a stale offset. i.e., it either
-   * returns the current offset or it begins to sync the cache from the log (and returns an error code).
+   * 此 API 提供的最重要的保证是它永远不会返回过时的偏移量。即，它要么
+   * 返回当前偏移量，或者开始从日志同步缓存（并返回错误代码）。
+   *
+   * 根据groupId与获取
    */
   def getOffsets(groupId: String, topicPartitionsOpt: Option[Seq[TopicPartition]]): Map[TopicPartition, OffsetFetchResponse.PartitionData] = {
     trace("Getting offsets of %s for group %s.".format(topicPartitionsOpt.getOrElse("all partitions"), groupId))
+    // 从缓存中获取的group信息
     val group = groupMetadataCache.get(groupId)
     if (group == null) {
       topicPartitionsOpt.getOrElse(Seq.empty[TopicPartition]).map { topicPartition =>
@@ -456,8 +462,7 @@ class GroupMetadataManager(brokerId: Int,
         } else {
           topicPartitionsOpt match {
             case None =>
-              // Return offsets for all partitions owned by this consumer group. (this only applies to consumers
-              // that commit offsets to Kafka.)
+              // 返回此使用者组拥有的所有分区的偏移量。（这仅适用于消费者将 offset 提交到 Kafka）
               group.allOffsets.map { case (topicPartition, offsetAndMetadata) =>
                 topicPartition -> new OffsetFetchResponse.PartitionData(offsetAndMetadata.offset,
                   offsetAndMetadata.leaderEpoch, offsetAndMetadata.metadata, Errors.NONE)
@@ -684,7 +689,7 @@ class GroupMetadataManager(brokerId: Int,
   /**
    * When this broker becomes a follower for an offsets topic partition clear out the cache for groups that belong to
    * that partition.
-   *
+   * 删除partition
    * @param offsetsPartition Groups belonging to this partition of the offsets topic will be deleted from the cache.
    */
   def removeGroupsForPartition(offsetsPartition: Int,

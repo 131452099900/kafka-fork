@@ -381,7 +381,7 @@ public class Selector implements Selectable, AutoCloseable {
      */
     public void send(Send send) {
         String connectionId = send.destination();
-        // 从连接ID获取kafkaChannel，实际上就是一个nioSelector
+        // 从连接ID获取kafkaChannel，实际上就是一个nioSelector然后获取channel
         KafkaChannel channel = openOrClosingChannelOrFail(connectionId);
         if (closingChannels.containsKey(connectionId)) {
             // ensure notification via `disconnected`, leave channel in the state in which closing was triggered
@@ -406,8 +406,9 @@ public class Selector implements Selectable, AutoCloseable {
     }
 
     /**
-     * Do whatever I/O can be done on each connection without blocking. This includes completing connections, completing
-     * disconnections, initiating new sends, or making progress on in-progress sends or receives.
+     * Do whatever I/O can be done on each connection without blocking. This includes
+     * completing connections, completing disconnections, initiating new sends, or making progress on in-progress sends
+     * or receives.
      *
      * When this call is completed the user can check for completed sends, receives, connections or disconnects using
      * {@link #completedSends()}, {@link #completedReceives()}, {@link #connected()}, {@link #disconnected()}. These
@@ -493,11 +494,10 @@ public class Selector implements Selectable, AutoCloseable {
         long endIo = time.nanoseconds();
         this.sensors.ioTime.record(endIo - endSelect, time.milliseconds());
 
-        // Close channels that were delayed and are now ready to be closed
+        //关闭已延迟但现在准备关闭的频道
         completeDelayedChannelClose(endIo);
 
-        // we use the time at the end of select to ensure that we don't close any connections that
-        // have just been processed in pollSelectionKeys
+        // 我们使用 select 末尾的时间来确保我们不会关闭任何 刚刚在 pollSelectionKeys 中处理过
         maybeCloseOldestConnection(endSelect);
 
         // ！！！在关闭过期连接后添加到 completedReceives ，以避免在所有暂存接收完成之前删除具有已完成接收的通道。
@@ -765,6 +765,7 @@ public class Selector implements Selectable, AutoCloseable {
         if (timeoutMs == 0L)
             return this.nioSelector.selectNow();
         else
+            // 不会无限
             return this.nioSelector.select(timeoutMs);
     }
 

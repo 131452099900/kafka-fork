@@ -186,10 +186,15 @@ private[group] class GroupMetadata(val groupId: String, initialState: GroupState
   private val members = new mutable.HashMap[String, MemberMetadata]
   private var numMembersAwaitingJoin = 0
   private val supportedProtocols = new mutable.HashMap[String, Integer]().withDefaultValue(0)
+  // 对应每个partition的offset
   private val offsets = new mutable.HashMap[TopicPartition, CommitRecordMetadataAndOffset]
+  // 待处理的偏移提交
   private val pendingOffsetCommits = new mutable.HashMap[TopicPartition, OffsetAndMetadata]
+  // 待处理的事务偏移提交
   private val pendingTransactionalOffsetCommits = new mutable.HashMap[Long, mutable.Map[TopicPartition, CommitRecordMetadataAndOffset]]()
+  // 收到的事务偏移提交
   private var receivedTransactionalOffsetCommits = false
+  // 收到的 Consumer Offset 提交
   private var receivedConsumerOffsetCommits = false
 
   var newMemberAdded: Boolean = false

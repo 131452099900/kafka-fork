@@ -505,6 +505,7 @@ class GroupCoordinator(val brokerId: Int,
       } else if ((generationId < 0 && group.is(Empty)) || (producerId != NO_PRODUCER_ID)) {
         // The group is only using Kafka to store offsets.
         // Also, for transactional offset commits we don't need to validate group membership and the generation.
+        // 正常情况
         groupManager.storeOffsets(group, memberId, offsetMetadata, responseCallback, producerId, producerEpoch)
       } else if (group.is(CompletingRebalance)) {
         responseCallback(offsetMetadata.mapValues(_ => Errors.REBALANCE_IN_PROGRESS))
@@ -526,8 +527,9 @@ class GroupCoordinator(val brokerId: Int,
     validateGroupStatus(groupId, ApiKeys.OFFSET_FETCH) match {
       case Some(error) => error -> Map.empty
       case None =>
-        // return offsets blindly regardless the current group state since the group may be using
-        // Kafka commit storage without automatic group management
+        // 正常case
+        // 无论当前组状态如何，都盲目地返回偏移量，因为该组可能正在使用
+        // 没有自动组管理的 Kafka 提交存储
         (Errors.NONE, groupManager.getOffsets(groupId, partitions))
     }
   }

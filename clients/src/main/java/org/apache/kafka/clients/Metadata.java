@@ -95,6 +95,7 @@ public class Metadata implements Closeable {
         this.refreshBackoffMs = refreshBackoffMs;
         this.metadataExpireMs = metadataExpireMs;
         this.allowAutoTopicCreation = allowAutoTopicCreation;
+        // 默认是false
         this.topicExpiryEnabled = topicExpiryEnabled;
         this.lastRefreshMs = 0L;
         this.lastSuccessfulRefreshMs = 0L;
@@ -240,12 +241,13 @@ public class Metadata implements Closeable {
     }
 
     /**
-     * Updates the cluster metadata. If topic expiry is enabled, expiry time
-     * is set for topics if required and expired topics are removed from the metadata.
+     * 初始化更新
+     * 更新集群元数据。如果启用了主题过期，则为过期时间
+     * （如果需要），并且会从元数据中删除过期的主题。
      *
-     * @param newCluster the cluster containing metadata for topics with valid metadata
+     * @param newCluster the cluster containing metadata for topics with valid metadata 初始化时给的bootstrap Server
      * @param unavailableTopics topics which are non-existent or have one or more partitions whose
-     *        leader is not known
+     *        leader is not known 无效的topic
      * @param now current time in milliseconds
      */
     public synchronized void update(Cluster newCluster, Set<String> unavailableTopics, long now) {
@@ -253,40 +255,47 @@ public class Metadata implements Closeable {
         if (isClosed())
             throw new IllegalStateException("Update requested after metadata close");
 
+        // 修改标识
         this.needUpdate = false;
         this.lastRefreshMs = now;
         this.lastSuccessfulRefreshMs = now;
+        // version+1 后续需要发送
         this.version += 1;
 
         if (topicExpiryEnabled) {
-            // Handle expiry of topics from the metadata refresh set.
+            //处理元数据刷新集中主题的过期。 如果开启了自动更新主题他会定时去检查topic是否过期
             for (Iterator<Map.Entry<String, Long>> it = topics.entrySet().iterator(); it.hasNext(); ) {
                 Map.Entry<String, Long> entry = it.next();
                 long expireMs = entry.getValue();
                 if (expireMs == TOPIC_EXPIRY_NEEDS_UPDATE)
                     entry.setValue(now + TOPIC_EXPIRY_MS);
                 else if (expireMs <= now) {
+                    // 直接删除，后续发现没有这个topic就会去发送io时间，然后由sender发送
                     it.remove();
                     log.debug("Removing unused topic {} from the metadata list, expiryMs {} now {}", entry.getKey(), expireMs, now);
                 }
             }
         }
 
+        // 这里在consumer的角度的化就是通知ConsumerCoordinator去修改metadata的标识
         for (Listener listener: listeners)
+            // 广播监听
             listener.onMetadataUpdate(newCluster, unavailableTopics);
 
         String previousClusterId = cluster.clusterResource().clusterId();
 
+        //
         if (this.needMetadataForAllTopics) {
             // the listener may change the interested topics, which could cause another metadata refresh.
             // If we have already fetched all topics, however, another fetch should be unnecessary.
             this.needUpdate = false;
             this.cluster = getClusterForCurrentTopics(newCluster);
         } else {
+            // 修改cluster，也是这个方法的关键
             this.cluster = newCluster;
         }
 
-        // The bootstrap cluster is guaranteed not to have any useful information
+        // 保证引导集群没有任何有用的信息 这里一般时序列化器和非序列化器监听
         if (!newCluster.isBootstrapConfigured()) {
             String newClusterId = newCluster.clusterResource().clusterId();
             if (newClusterId == null ? previousClusterId != null : !newClusterId.equals(previousClusterId))
@@ -294,6 +303,7 @@ public class Metadata implements Closeable {
             clusterResourceListeners.onUpdate(newCluster.clusterResource());
         }
 
+        // 唤醒阻塞等待所有线程
         notifyAll();
         log.debug("Updated cluster metadata version {} to {}", this.version, this.cluster);
     }
@@ -398,6 +408,7 @@ public class Metadata implements Closeable {
         requestUpdate();
     }
 
+    // new了一个cluser
     private Cluster getClusterForCurrentTopics(Cluster cluster) {
         Set<String> unauthorizedTopics = new HashSet<>();
         Set<String> invalidTopics = new HashSet<>();

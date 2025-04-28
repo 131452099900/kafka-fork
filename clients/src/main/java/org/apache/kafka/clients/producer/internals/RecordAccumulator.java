@@ -460,7 +460,7 @@ public final class RecordAccumulator {
                     // This is a partition for which leader is not known, but messages are available to send.
                     // Note that entries are currently not removed from batches when deque is empty.
                     unknownLeaderTopics.add(part.topic());
-                } else if (!readyNodes.contains(leader) && !isMuted(part, nowMs)) {
+                } else if (!readyNodes.contains(leader) && !isMuted(part, nowMs)) { // 校验leader和顺序性
                     ProducerBatch batch = deque.peekFirst();
                     if (batch != null) {
                         long waitedTimeMs = batch.waitedTimeMs(nowMs);
@@ -539,7 +539,8 @@ public final class RecordAccumulator {
             TopicPartition tp = new TopicPartition(part.topic(), part.partition());
             this.drainIndex = (this.drainIndex + 1) % parts.size();
 
-            // Only proceed if the partition has no in-flight batches.
+            // 仅当分区没有正在进行的批处理时，才继续。
+            // 校验顺序性
             if (isMuted(tp, now))
                 continue;
 

@@ -55,7 +55,13 @@ public class SubscriptionState {
             "Subscription to topics, partitions and pattern are mutually exclusive";
 
     private enum SubscriptionType {
-        NONE, AUTO_TOPICS, AUTO_PATTERN, USER_ASSIGNED
+        NONE,
+        /** 按照指定的 topic 的名字进行订阅，自动分配分区 */
+        AUTO_TOPICS,
+        /** 按照正则匹配 topic 名称进行订阅，自动分配分区 */
+        AUTO_PATTERN,
+        /** 用户手动指定消费的 topic 以及分区 */
+        USER_ASSIGNED
     }
 
     /* the type of subscription */
@@ -108,10 +114,13 @@ public class SubscriptionState {
         if (listener == null)
             throw new IllegalArgumentException("RebalanceListener cannot be null");
 
+        // 订阅模式 一共四种NONE, AUTO_TOPICS, AUTO_PATTERN, USER_ASSIGNED
+        // 这里一般是直接根据名字订阅topic然后进行分配
         setSubscriptionType(SubscriptionType.AUTO_TOPICS);
 
         this.rebalanceListener = listener;
 
+        // 更新本地缓存的订阅的信息
         changeSubscription(topics);
     }
 
@@ -126,6 +135,9 @@ public class SubscriptionState {
     private void changeSubscription(Set<String> topicsToSubscribe) {
         if (!this.subscription.equals(topicsToSubscribe)) {
             this.subscription = topicsToSubscribe;
+            /**
+             * 如果该消费者是本group的leader，会记录所有消费者的topic，如果是follow只会记录自己的topic
+             */
             this.groupSubscription.addAll(topicsToSubscribe);
         }
     }
@@ -329,6 +341,7 @@ public class SubscriptionState {
         Map<TopicPartition, OffsetAndMetadata> allConsumed = new HashMap<>();
         for (PartitionStates.PartitionState<TopicPartitionState> state : assignment.partitionStates()) {
             if (state.value().hasValidPosition())
+                // 单纯就是TopicPartition position
                 allConsumed.put(state.topicPartition(), new OffsetAndMetadata(state.value().position));
         }
         return allConsumed;
@@ -361,6 +374,8 @@ public class SubscriptionState {
     }
 
     public boolean hasAllFetchPositions() {
+        // 如果每个TopicPartitionState都存在了就不需要去更新fetch位置，只有元数据不够的时候才会
+        // position committed resetStrategy
         for (PartitionStates.PartitionState<TopicPartitionState> state : assignment.partitionStates()) {
             if (!state.value().hasValidPosition())
                 return false;
@@ -413,6 +428,7 @@ public class SubscriptionState {
     }
 
     public boolean isFetchable(TopicPartition tp) {
+        // assignedState(tp).isFetchable()对于过高可以使用paused标识来限流暂停
         return isAssigned(tp) && assignedState(tp).isFetchable();
     }
 
@@ -458,12 +474,12 @@ public class SubscriptionState {
     }
 
     private static class TopicPartitionState {
-        private Long position; // last consumed position
-        private Long highWatermark; // the high watermark from last fetch
-        private Long logStartOffset; // the log start offset
+        private Long position; // 上次消耗的位置  下次fetch像broker拉取的offset起始位置
+        private Long highWatermark; // 上次提取的高水位线 isr的offset，也就是消费者最多能拉到的offset
+        private Long logStartOffset; // Log Start 偏移量 log文件开始的offset
         private Long lastStableOffset;
-        private boolean paused;  // whether this partition has been paused by the user
-        private OffsetResetStrategy resetStrategy;  // the strategy to use if the offset needs resetting
+        private boolean paused;  // 此分区是否已被用户暂停
+        private OffsetResetStrategy resetStrategy;  // 偏移量需要重置时使用的策略
         private Long nextAllowedRetryTimeMs;
 
         TopicPartitionState() {

@@ -104,13 +104,14 @@ public class ConsumerNetworkClient implements Closeable {
     }
 
     /**
-     * Send a new request. Note that the request is not actually transmitted on the
-     * network until one of the {@link #poll(Timer)} variants is invoked. At this
-     * point the request will either be transmitted successfully or will fail.
-     * Use the returned future to obtain the result of the send. Note that there is no
-     * need to check for disconnects explicitly on the {@link ClientResponse} object;
-     * instead, the future will be failed with a {@link DisconnectException}.
+     * 发送新请求。请注意，请求实际上并未在
+     * 网络，直到调用其中一个 {@link #poll（Timer）} 变体。在这个
+     * 点，则请求要么传输成功，要么失败。
+     * 使用返回的 future 获取 send 的结果。请注意，没有
+     * 需要在 {@link ClientResponse} 对象上显式检查断开连接;
+     * 相反，future 将失败，并显示 {@link DisconnectException}。
      *
+     * 实际上是由{@link #poll(Timer)} 进行io网络的发送
      * @param node The destination of the request
      * @param requestBuilder A builder for the request payload
      * @param requestTimeoutMs Maximum time in milliseconds to await a response before disconnecting the socket and
@@ -123,11 +124,24 @@ public class ConsumerNetworkClient implements Closeable {
                                               int requestTimeoutMs) {
         long now = time.milliseconds();
         RequestFutureCompletionHandler completionHandler = new RequestFutureCompletionHandler();
+        /**
+         * {
+         * 	"coordinatorKey": "your group id",
+         * 	"coordinatorType": 0, // 表示group
+         * 	"minVersion": 0, // group时为0
+         * }
+         */
         ClientRequest clientRequest = client.newClientRequest(node.idString(), requestBuilder, now, true,
                 requestTimeoutMs, completionHandler);
+        // 放入未发送队列
+        /**
+         * 在这里会获取到unsent的nodes然后发送
+         * {@link ConsumerNetworkClient#poll(org.apache.kafka.common.utils.Timer, org.apache.kafka.clients.consumer.internals.ConsumerNetworkClient.PollCondition, boolean)}
+         * @see org.apache.kafka.clients.consumer.internals.ConsumerNetworkClient#trySend(long)
+         */
         unsent.put(node, clientRequest);
 
-        // wakeup the client in case it is blocking in poll so that we can send the queued request
+        // 唤醒io线程
         client.wakeup();
         return completionHandler.future;
     }
@@ -238,12 +252,13 @@ public class ConsumerNetworkClient implements Closeable {
 
     /**
      * Poll for any network IO.
+     * 论文任何网络IO事件
      * @param timer Timer bounding how long this method can block
      * @param pollCondition Nullable blocking condition
      * @param disableWakeup If TRUE disable triggering wake-ups
      */
     public void poll(Timer timer, PollCondition pollCondition, boolean disableWakeup) {
-        // there may be handlers which need to be invoked if we woke up the previous call to poll
+        // 如果我们唤醒了上一次对 poll 的调用，则可能需要调用一些处理程序
         firePendingCompletedRequests();
 
         lock.lock();
@@ -251,12 +266,18 @@ public class ConsumerNetworkClient implements Closeable {
             // Handle async disconnects prior to attempting any sends
             handlePendingDisconnects();
 
-            // send all the requests we can send now
+            /**
+             * 发送我们现在可以发送的所有请求  使用netClient发送send事件，让在selector注册事件
+             * 获取到unset所有node然后发送send事件
+             * {@link org.apache.kafka.common.network.Selector#send}
+             */
             long pollDelayMs = trySend(timer.currentTimeMs());
 
-            // check whether the poll is still needed by the caller. Note that if the expected completion
-            // condition becomes satisfied after the call to shouldBlock() (because of a fired completion
-            // handler), the client will be woken up.
+            /**
+             * 检查调用方是否仍需要轮询。请注意，如果预期的完成
+                condition 在调用 shouldBlock（） 后（由于触发的补全
+                handler），则客户端将被唤醒。
+             */
             if (pendingCompletion.isEmpty() && (pollCondition == null || pollCondition.shouldBlock())) {
                 // if there are no requests in flight, do not block longer than the retry backoff
                 long pollTimeout = Math.min(timer.remainingMs(), pollDelayMs);
@@ -264,6 +285,7 @@ public class ConsumerNetworkClient implements Closeable {
                     pollTimeout = Math.min(pollTimeout, retryBackoffMs);
                 client.poll(pollTimeout, timer.currentTimeMs());
             } else {
+                // ！！！真正发送的地方，去找到刚刚给selector注册的事件
                 client.poll(0, timer.currentTimeMs());
             }
             timer.update();
@@ -284,10 +306,10 @@ public class ConsumerNetworkClient implements Closeable {
             // cleared or a connect finished in the poll
             trySend(timer.currentTimeMs());
 
-            // fail requests that couldn't be sent if they have expired
+            // 如果请求已过期，则无法发送的请求失败
             failExpiredRequests(timer.currentTimeMs());
 
-            // clean unsent requests collection to keep the map from growing indefinitely
+            // 把unsent对了清除
             unsent.clean();
         } finally {
             lock.unlock();
@@ -464,6 +486,7 @@ public class ConsumerNetworkClient implements Closeable {
         long pollDelayMs = maxPollTimeoutMs;
 
         // send any requests that can be sent now
+        // 从unsent获取到node的ClientRequest队列，然后发送
         for (Node node : unsent.nodes()) {
             Iterator<ClientRequest> iterator = unsent.requestIterator(node);
             if (iterator.hasNext())
@@ -481,6 +504,8 @@ public class ConsumerNetworkClient implements Closeable {
     }
 
     public void maybeTriggerWakeup() {
+        // 安全标识wakeupDisabled(线程在执行不可中断的方法) wakeup(线程中断请求)
+        // 如果线程没有在执行不可中断的方法，并收到了中断请求，抛出异常中断线程
         if (!wakeupDisabled.get() && wakeup.get()) {
             log.debug("Raising WakeupException in response to user wakeup");
             wakeup.set(false);

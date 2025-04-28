@@ -475,8 +475,7 @@ public class NetworkClient implements KafkaClient {
                 version = versionInfo.latestUsableVersion(clientRequest.apiKey(), builder.oldestAllowedVersion(),
                         builder.latestAllowedVersion());
             }
-            // The call to build may also throw UnsupportedVersionException, if there are essential
-            // fields that cannot be represented in the chosen version.
+            // 添加send事件，
             doSend(clientRequest, isInternalRequest, now, builder.build(version));
         } catch (UnsupportedVersionException unsupportedVersionException) {
             // If the version is not supported, skip sending the request over the wire.
@@ -543,6 +542,7 @@ public class NetworkClient implements KafkaClient {
         // 如果需要更新元数据
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
+            // 真正发送的地方
             // 调用selector，然后调用nioChannel
             // ！！！ 所以sender线程其实也就是在这里去阻塞的，他会唤醒这个selector的线程去获取channel里面的事件
             // 也就是两种类型的事件 1.metadata事件更新事件；2.请求事件
@@ -936,9 +936,11 @@ public class NetworkClient implements KafkaClient {
     private void initiateConnect(Node node, long now) {
         String nodeConnectionId = node.idString();
         try {
+            // 完成长连接的初始化
             connectionStates.connecting(nodeConnectionId, now, node.host(), clientDnsLookup);
             InetAddress address = connectionStates.currentAddress(nodeConnectionId);
             log.debug("Initiating connection to node {} using address {}", node, address);
+            // 调用selector的connect事件
             selector.connect(nodeConnectionId,
                     new InetSocketAddress(address, node.port()),
                     this.socketSendBuffer,
